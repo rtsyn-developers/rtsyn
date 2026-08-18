@@ -1,0 +1,19 @@
+# Xmake cache
+.xmake/
+build/
+
+# Cargo cache
+target/
+
+# MacOS Cache
+.DS_Store
+
+# Clangd
+compile_commands.json
+.cache/
+
+# RTSyn
+app_workspaces/
+
+# Release
+dist/
