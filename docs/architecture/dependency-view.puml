@@ -1,0 +1,83 @@
+@startuml
+title RTSyn v1.0.0 - Process and dependency view
+
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 0
+skinparam componentStyle rectangle
+skinparam linetype ortho
+left to right direction
+
+actor User
+
+package "Client process: rtsyn" {
+    component "GUI\nmain thread" as Gui
+    component "GUI worker\nHTTP + JSONL reader" as GuiWorker
+    component "CLI\nHTTP commands" as Cli
+    database "Workspace TOML\nand UI metadata" as Workspace
+
+    Gui --> GuiWorker
+    Gui --> Workspace
+    Cli --> Workspace
+}
+
+cloud "HTTP\n127.0.0.1:17190" as HttpTransport
+
+package "Daemon process: rtsyn --no-gui daemon run" {
+    component "HTTP API\nserver thread" as Api
+    component "Telemetry drain\nnon-RT thread" as Drain
+
+    queue "Command SPSC\nAPI -> RT" as Commands
+    queue "Result SPSC\nRT -> API" as Results
+    queue "Telemetry event SPSC\nRT -> drain" as Events
+    queue "Telemetry value ring\nRT -> drain" as Values
+
+    component "Engine RT cycle thread\ncommands, runtime step, absolute sleep" as Engine
+    component "Engine wait thread\njoin and lifecycle" as Wait
+    component "Runtime\ngraph and deterministic stages" as Runtime
+}
+
+component "ABI plugin and device nodes" as Nodes
+component "Physical hardware\nor external system" as Hardware
+database "Telemetry files\nJSONL values and optional CSV" as TelemetryFiles
+
+User --> Gui : default frontend
+User --> Cli : --no-gui
+GuiWorker --> HttpTransport : HTTP
+Cli --> HttpTransport : HTTP
+HttpTransport --> Api
+
+Api --> Commands : control request
+Commands --> Engine : consume at cycle boundary
+Engine --> Results : result / descriptor
+Results --> Api : response or snapshot
+
+Engine --> Runtime : one cycle
+Runtime --> Nodes : ABI callbacks
+Nodes --> Hardware : device read / write
+Wait --> Engine : join after stop
+
+Engine --> Events : lifecycle and measurement events
+Engine --> Values : subscribed samples
+Events --> Drain
+Values --> Drain
+Drain --> TelemetryFiles : append JSONL / CSV
+GuiWorker --> TelemetryFiles : tail live values
+
+note bottom of Runtime
+Cycle order: device read, current-cycle propagation, plugin processing,
+current-cycle propagation, device write. Only a plugin-to-plugin edge that
+closes a cycle is staged for the next cycle.
+end note
+
+note bottom of Commands
+All four queues are fixed-capacity POSIX shared-memory SPSC channels.
+Their hot paths are non-blocking and allocation-free after setup.
+end note
+
+note bottom of Gui
+GUI and CLI are clients only. Workspaces are client-side and never own
+the runtime graph.
+end note
+
+@enduml

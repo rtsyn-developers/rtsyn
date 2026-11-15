@@ -1,0 +1,64 @@
+@startuml
+title RTSyn v1.0.0 - Functional flow
+
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 0
+skinparam sequenceMessageAlign center
+
+actor User
+participant "GUI or CLI\nclient" as Client
+participant "HTTP API\nserver thread" as Api
+queue "Command SPSC" as Commands
+participant "Engine\nRT cycle thread" as Engine
+participant "Runtime + ABI nodes" as Runtime
+queue "Result SPSC" as Results
+queue "Telemetry SPSC\nevents + values" as TelemetryQueue
+participant "Telemetry drain\nnon-RT thread" as Drain
+database "JSONL values\noptional CSV" as Files
+
+== Start and control ==
+User -> Client: Launch GUI or CLI
+Client -> Api: HTTP request
+Api -> Commands: enqueue command
+Engine -> Commands: consume at a cycle boundary
+Engine -> Runtime: apply graph, node, or timing change
+Engine -> Results: publish result when required
+Results --> Api: correlated result
+Api --> Client: HTTP response
+
+== Realtime cycle ==
+loop Every configured period
+    Engine -> Runtime: step()
+    activate Runtime
+    Runtime -> Runtime: device immediate/read
+    Runtime -> Runtime: propagate current-cycle connections
+    Runtime -> Runtime: plugin processing
+    Runtime -> Runtime: propagate current-cycle connections
+    Runtime -> Runtime: device terminal/write
+    Runtime -> Runtime: stage cyclic plugin edges for next cycle
+    Runtime --> Engine: stage timestamps
+    deactivate Runtime
+    Engine -> TelemetryQueue: events, measurements, subscribed values
+    Engine -> Engine: sleep until absolute deadline
+end
+
+== Non-RT telemetry ==
+Drain -> TelemetryQueue: drain events and values
+Drain -> Files: append JSONL / CSV
+Client -> Api: query nodes, status, measurements
+Api --> Client: cached non-RT snapshot
+Client -> Files: GUI tails JSONL values when needed
+
+note over Runtime
+Device-to-plugin and plugin-to-device data propagate in the same cycle.
+Only cyclic plugin-to-plugin dependencies advance by one cycle.
+end note
+
+== Stop ==
+User -> Client: Stop daemon
+Client -> Api: global stop request
+Api -> Commands: enqueue stop
+Engine -> Engine: leave RT loop
+
+@enduml
