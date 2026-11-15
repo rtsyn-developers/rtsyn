@@ -1,0 +1,6 @@
+.git
+.xmake
+build
+dist
+target
+

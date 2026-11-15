@@ -1,0 +1,40 @@
+FROM quay.io/pypa/manylinux_2_28_x86_64 AS builder
+
+ARG RUST_TOOLCHAIN=1.98.1
+ARG THREAD_CORE=posix
+
+RUN dnf install --assumeyes \
+        fontconfig-devel \
+        freetype-devel \
+        libuv-devel \
+        pkgconf-pkg-config \
+        shadow-utils \
+        unzip \
+    && dnf clean all
+
+RUN useradd --create-home --uid 1000 builder \
+    && mkdir -p /release \
+    && chown builder:builder /release
+
+USER builder
+
+RUN curl --fail --silent --show-error --location https://xmake.io/shget.text | bash
+RUN curl --proto '=https' --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}"
+
+ENV PATH="/home/builder/.cargo/bin:/home/builder/.local/bin:${PATH}"
+ENV RTSYN_STATIC_CXX_RUNTIME=1
+
+WORKDIR /src/rtsyn
+COPY --chown=builder:builder . .
+
+RUN env -u RTSYN_WORKSPACE xmake f -c -y -m release --thread_core="${THREAD_CORE}" \
+    && xmake build rtsyn
+
+RUN mkdir -p /release \
+    && cp build/linux/x86_64/release/rtsyn /release/rtsyn
+
+RUN max_glibc="$(readelf --version-info /release/rtsyn \
+        | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -n 1)" \
+    && test "$(printf '%s\n' GLIBC_2.28 "${max_glibc}" | sort -V | tail -n 1)" = GLIBC_2.28 \
+    && ! readelf --version-info /release/rtsyn | grep -q 'GLIBCXX_'
